@@ -27,9 +27,9 @@ DEFAULT_CONFIG = {
     "output_directory": "scan_results",
     "udp_ports": [
         53, 161, 162, 67, 68, 69, 123, 137, 138, 139, 500, 514, 520, 623, 1701,
-        1900, 4500, 49152, 49153, 49154, 111, 135, 631, 1434, 5353, 49155,
-        49156, 49157, 49158, 49159, 49160, 49161, 49162, 49163, 49164, 49165,
-        49166, 49167, 49168, 49169, 49170
+        1900, 4500, 49152, 49153, 49154, 49155, 49156, 49157, 49158, 49159,
+        49160, 49161, 49162, 49163, 49164, 49165, 49166, 49167, 49168, 49169,
+        49170
     ],
     "nmap_flags_tcp": "-sT -sC -sV -A -Pn -p1-65535",
     "nmap_flags_udp": "-sU --top-ports 50"
@@ -39,6 +39,18 @@ CONFIG_FILE = "config.json"
 
 # Global to collect summary info
 summary_data = []
+
+# Mapping Colorama colors to tqdm-compatible colors
+COLORAMA_TO_TQDM = {
+    Fore.BLACK: "BLACK",
+    Fore.RED: "RED",
+    Fore.GREEN: "GREEN",
+    Fore.YELLOW: "YELLOW",
+    Fore.BLUE: "BLUE",
+    Fore.MAGENTA: "MAGENTA",
+    Fore.CYAN: "CYAN",
+    Fore.WHITE: "WHITE",
+}
 
 def load_config():
     if not os.path.exists(CONFIG_FILE):
@@ -60,7 +72,7 @@ Path(config["output_directory"]).mkdir(parents=True, exist_ok=True)
 
 # ASCII banner
 def show_banner():
-    banner = pyfiglet.figlet_format("Fancy Scanner")
+    banner = pyfiglet.figlet_format("Fancy Nmap Wrapper")
     print(Fore.CYAN + banner)
     print(Fore.GREEN + "Multi-Mode Network Scanner with Style!")
     print(Fore.YELLOW + "=" * 60)
@@ -102,11 +114,14 @@ def discovery(subnets):
     reachable = []
     with ThreadPoolExecutor(max_workers=config["thread_count"]) as executor:
         futures = {executor.submit(ping_host, host): host for host in all_hosts}
-        for future in tqdm(as_completed(futures), total=len(futures),
-                           desc="Discovery Progress", colour="cyan", ncols=80):
+        pbar = tqdm(as_completed(futures), total=len(futures),
+                    desc="Discovery Progress", colour="CYAN", ncols=80)
+        for future in pbar:
             result = future.result()
             if result:
                 reachable.append(result)
+        pbar.close()
+        print() # Ensure user input is visible following the scan
 
     with open(targets_file, 'w') as f:
         for ip in reachable:
@@ -152,11 +167,15 @@ def scan_targets(scan_func, scan_type, scan_label, color):
 
     print(color + f"\n=== Starting {scan_label} ===\n")
     results = []
+    tqdm_color = COLORAMA_TO_TQDM.get(color, "CYAN")
     with ThreadPoolExecutor(max_workers=config["thread_count"]) as executor:
         futures = {executor.submit(scan_func, ip, scan_type): ip for ip in targets}
-        for future in tqdm(as_completed(futures), total=len(futures),
-                           desc=f"{scan_label} Progress", colour=color.strip(), ncols=80):
+        pbar = tqdm(as_completed(futures), total=len(futures),
+                    desc=f"{scan_label} Progress", colour=tqdm_color, ncols=80)
+        for future in pbar:
             results.append(future.result())
+        pbar.close()
+        print() # Ensure user input is visible following the scan
 
     files_created = [r["file"] for r in results]
 
@@ -181,8 +200,8 @@ def collect_scan_choices():
     while True:
         print(Fore.CYAN + "\nAvailable scan options:")
         print("1. Discovery (Ping Sweep)")
-        print("2. TCP Scans")
-        print("3. UDP Scans")
+        print("2. TCP Scan (single run)")
+        print("3. UDP Scan (single run)")
         print("4. Done selecting scans")
 
         choice = input(Fore.YELLOW + "Select an option: ").strip()
@@ -196,20 +215,14 @@ def collect_scan_choices():
                 print(Fore.GREEN + "[+] Discovery scan added.")
 
         elif choice == '2':
-            num = int(input(Fore.YELLOW + "How many TCP scans do you want to run? "))
-            if num > 10:
-                print(Fore.RED + "[!] Warning: More than 10 scans may cause instability.")
             mode = get_scan_type()
-            selected_scans.append({"type": "tcp", "count": num, "mode": mode})
-            print(Fore.GREEN + f"[+] {num} TCP scan(s) added.")
+            selected_scans.append({"type": "tcp", "mode": mode})
+            print(Fore.GREEN + f"[+] TCP scan ({mode}) added.")
 
         elif choice == '3':
-            num = int(input(Fore.YELLOW + "How many UDP scans do you want to run? "))
-            if num > 10:
-                print(Fore.RED + "[!] Warning: More than 10 scans may cause instability.")
             mode = get_scan_type()
-            selected_scans.append({"type": "udp", "count": num, "mode": mode})
-            print(Fore.GREEN + f"[+] {num} UDP scan(s) added.")
+            selected_scans.append({"type": "udp", "mode": mode})
+            print(Fore.GREEN + f"[+] UDP scan ({mode}) added.")
 
         elif choice == '4':
             break
@@ -223,7 +236,7 @@ def collect_scan_choices():
             if scan["type"] == "discovery":
                 print(f"{idx}. Discovery | Subnets: {', '.join(scan['subnets'])}")
             else:
-                print(f"{idx}. {scan['type'].upper()} | Count: {scan['count']} | Mode: {scan['mode']}")
+                print(f"{idx}. {scan['type'].upper()} | Mode: {scan['mode']}")
         print(Fore.MAGENTA + "================================\n")
 
         more = input(Fore.YELLOW + "Would you like to add more scans? (y/n): ").strip().lower()
@@ -238,20 +251,15 @@ def run_selected_scans(scan_choices):
     discovery_scan = next((s for s in scan_choices if s['type'] == 'discovery'), None)
     other_scans = [s for s in scan_choices if s['type'] != 'discovery']
 
-    if discovery_scan and other_scans:
+    if discovery_scan:
         print(Fore.YELLOW + "[!] Discovery must complete before other scans can start.")
-        discovery(discovery_scan['subnets'])
-
-    elif discovery_scan:
         discovery(discovery_scan['subnets'])
 
     for scan in other_scans:
         if scan['type'] == 'tcp':
-            for i in range(scan['count']):
-                scan_targets(tcp_scan, scan['mode'], f"TCP Scan {i+1}", Fore.BLUE)
+            scan_targets(tcp_scan, scan['mode'], "TCP Scan", Fore.BLUE)
         elif scan['type'] == 'udp':
-            for i in range(scan['count']):
-                scan_targets(udp_scan, scan['mode'], f"UDP Scan {i+1}", Fore.MAGENTA)
+            scan_targets(udp_scan, scan['mode'], "UDP Scan", Fore.MAGENTA)
 
     print(Fore.GREEN + "\n[+] All selected scans have completed.\n")
     show_summary_report()
@@ -265,6 +273,13 @@ def show_summary_report():
         table.add_row([entry["Scan Type"], entry["Details"], files_display])
     print(table)
     print(Fore.YELLOW + "\n[+] Summary report complete.\n")
+    
+def parse_args():
+    parser = argparse.ArgumentParser(description="Fancy Scanner")
+    parser.add_argument("--json", action="store_true", help="Enable JSON output")
+    args = parser.parse_args()
+    if args.json:
+        config["enable_json"] = True
 
 def main_menu():
     while True:
@@ -287,9 +302,5 @@ def main_menu():
             print(Fore.RED + "Invalid option. Try again.")
 
 if __name__ == "__main__":
-    parser = argparse.ArgumentParser(description="Fancy Scanner")
-    parser.add_argument("--json", action="store_true", help="Enable JSON output")
-    args = parser.parse_args()
-    if args.json:
-        config["enable_json"] = True
+    parse_args()
     main_menu()

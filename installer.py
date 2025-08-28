@@ -10,7 +10,9 @@ MIN_PYTHON = (3, 7)
 REQUIREMENTS = [
     "tqdm",
     "colorama",
-    "pyfiglet"
+    "pyfiglet",
+    "prettytable",
+    "pytest-cov"
 ]
 
 def check_python_version():
@@ -35,7 +37,7 @@ def print_venv_guide(venv_path):
     print("\n💡 Virtual Environment Usage Guide:")
     print(f"1. Activate the venv: source {venv_path}/bin/activate")
     print("2. Install dependencies: pip install -r requirements.txt")
-    print("3. Run the scanner: python fancy_scanner.py")
+    print("3. Run the scanner: python fnw.py")
     print("4. Deactivate the venv when done: deactivate\n")
 
 def create_venv(venv_path):
@@ -86,7 +88,7 @@ def install_pytest(manager):
 
 def main():
     check_python_version()
-    print("🛠 Fancy Network Scanner Installer\n")
+    print("🛠 Fancy Nmap Wrapper Installer\n")
 
     # Step 0: Ensure requirements.txt exists
     create_requirements_file()
@@ -111,7 +113,7 @@ def main():
                 sys.exit(1)
         else:
             base_path = Path.home() / ".venv"
-        venv_path = base_path / "fancy-ns"
+        venv_path = base_path / "fnw"
         venv_path.mkdir(parents=True, exist_ok=True)
         auto_create = input(f"Do you want to automatically create the venv and install dependencies at {venv_path}? (y/n): ").strip().lower()
         if auto_create == 'y':
