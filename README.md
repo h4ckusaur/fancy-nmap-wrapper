@@ -1,6 +1,6 @@
 # 🚀 Fancy Nmap Wrapper
 
-[![Codecov](https://img.shields.io/codecov/c/github/h4ckusaur/fancy-nmap-wrapper/main.svg?style=flat-square)](https://codecov.io/gh/h4ckusaur/fancy-nmap-wrapper)
+[![Codecov](https://codecov.io/gh/h4ckusaur/fancy-nmap-wrapper/branch/main/graph/badge.svg?token=YOUR_TOKEN_HERE)](https://codecov.io/gh/h4ckusaur/fancy-nmap-wrapper)
 
 A multi-threaded, stylish, and configurable network scanner with:
 
