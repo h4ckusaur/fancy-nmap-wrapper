@@ -1,30 +1,24 @@
+#!/usr/bin/env python3
+"""Unit tests for fnw.py."""
+
 import builtins
 import pytest
 from unittest.mock import patch
-import os
-from colorama import Fore  # <- add this
+from colorama import Fore
 
 import fnw
 from fnw import collect_scan_choices, run_selected_scans, scan_targets
 
 
-# Helper to simulate input() calls
 def _inputs(*inputs):
+    """Generate simulated user input."""
     for i in inputs:
         yield i
 
 
 def test_collect_scan_choices_single_tcp_udp(monkeypatch):
-    # TCP -> internal, then add more? y -> UDP -> external, then add more? n
-    user_inputs = _inputs(
-        "2",
-        "1",
-        "y",  # TCP -> internal, yes add more
-        "3",
-        "2",
-        "n",  # UDP -> external, no more
-        "4",  # Done
-    )
+    """Test that a single TCP and UDP scan can be selected correctly."""
+    user_inputs = _inputs("2", "1", "y", "3", "2", "n", "4")
     monkeypatch.setattr(builtins, "input", lambda _: next(user_inputs))
     scans = collect_scan_choices()
     tcp_scan = next(s for s in scans if s["type"] == "tcp")
@@ -34,25 +28,16 @@ def test_collect_scan_choices_single_tcp_udp(monkeypatch):
 
 
 def test_collect_scan_choices_prevent_multiple_discovery(monkeypatch, capsys):
-    # Discovery -> internal TCP
-    user_inputs = _inputs(
-        "1",
-        "192.168.0.0/30",
-        "y",  # Discovery, yes add more
-        "2",
-        "1",
-        "n",  # TCP -> internal, no more
-        "4",  # Done
-    )
+    """Ensure only one discovery scan is allowed but TCP can still be added."""
+    user_inputs = _inputs("1", "192.168.0.0/30", "y", "2", "1", "n", "4")
     monkeypatch.setattr(builtins, "input", lambda _: next(user_inputs))
     scans = collect_scan_choices()
-    # Only one discovery
     assert sum(1 for s in scans if s["type"] == "discovery") == 1
-    # TCP should still be added
     assert any(s["type"] == "tcp" for s in scans)
 
 
 def test_run_selected_scans_only_tcp():
+    """Ensure running only TCP scan triggers scan_targets with TCP label."""
     call_order = []
 
     def mock_scan_targets(scan_func, scan_type, label, color):
@@ -66,6 +51,7 @@ def test_run_selected_scans_only_tcp():
 
 
 def test_run_selected_scans_only_udp():
+    """Ensure running only UDP scan triggers scan_targets with UDP label."""
     call_order = []
 
     def mock_scan_targets(scan_func, scan_type, label, color):
@@ -79,9 +65,10 @@ def test_run_selected_scans_only_udp():
 
 
 def test_scan_targets_creates_json(tmp_path, monkeypatch):
-    # Prepare config
+    """Check that scan_targets writes JSON output if enabled."""
     monkeypatch.setattr(
-        "fnw.config",
+        fnw,
+        "config",
         {
             "output_directory": str(tmp_path),
             "thread_count": 1,
@@ -90,7 +77,6 @@ def test_scan_targets_creates_json(tmp_path, monkeypatch):
         },
     )
 
-    # Write dummy targets file
     (tmp_path / "targets.txt").write_text("192.168.0.1\n")
 
     def dummy_scan(ip, mode):
@@ -101,73 +87,70 @@ def test_scan_targets_creates_json(tmp_path, monkeypatch):
             "file": str(tmp_path / f"{ip}.txt"),
         }
 
-    # Pass a color to avoid TypeError
-    res = scan_targets(dummy_scan, "internal", "TCP Scan", "\033[36m")
+    res = scan_targets(dummy_scan, "internal", "TCP Scan", Fore.BLUE)
     assert len(res) == 1
-    json_file = tmp_path / "results_internal_tcp scan.json"
-    assert json_file.exists() or any(f.endswith(".json")
-                                     for f in os.listdir(tmp_path))
+    json_files = list(tmp_path.glob("*.json"))
+    assert json_files, "JSON output file not created"
 
 
 def test_discovery_creates_targets_file(tmp_path):
-    # Patch config
+    """Verify discovery creates targets.txt with reachable IPs."""
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(
         fnw, "config", {"output_directory": str(tmp_path), "thread_count": 1}
     )
 
-    # Run discovery with a small subnet
     fnw.discovery(["192.168.0.0/30"])
     targets_file = tmp_path / "targets.txt"
     assert targets_file.exists()
     lines = targets_file.read_text().splitlines()
     assert all(line.startswith("192.168.0.") for line in lines)
-
     monkeypatch.undo()
 
 
 def test_tcp_scan_returns_dict(tmp_path):
+    """TCP scan returns a dictionary with required keys."""
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(
         fnw,
         "config",
         {"output_directory": str(tmp_path), "nmap_flags_tcp": "-sT -Pn -p22"},
     )
-
     res = fnw.tcp_scan("127.0.0.1", "internal")
     assert res["ip"] == "127.0.0.1"
     assert res["type"] == "tcp"
     assert "file" in res
-
     monkeypatch.undo()
 
 
 def test_udp_scan_returns_dict(tmp_path):
+    """UDP scan returns a dictionary with required keys."""
     monkeypatch = pytest.MonkeyPatch()
     monkeypatch.setattr(
         fnw, "config", {"output_directory": str(tmp_path), "udp_ports": [53]}
     )
-
     res = fnw.udp_scan("127.0.0.1", "internal")
     assert res["ip"] == "127.0.0.1"
     assert res["type"] == "udp"
     assert "file" in res
-
     monkeypatch.undo()
 
 
 def test_discovery_invalid_subnet(capsys):
-    # Pass invalid subnet
+    """Pass invalid subnet and confirm error message."""
     fnw.discovery(["300.300.0.0/24"])
     out = capsys.readouterr().out
     assert "Invalid subnet" in out
 
 
 def test_scan_targets_no_targets_file(tmp_path, capsys):
+    """Ensure scan_targets gracefully handles missing targets.txt."""
     monkeypatch = pytest.MonkeyPatch()
-    monkeypatch.setattr(fnw, "config", {"output_directory": str(
-        tmp_path), "thread_count": 1, "enable_json": False}, )
-    # Ensure no targets.txt exists
+    monkeypatch.setattr(
+        fnw,
+        "config",
+        {"output_directory": str(tmp_path), "thread_count": 1, "enable_json": False},
+    )
     results = fnw.scan_targets(fnw.tcp_scan, "internal", "TCP Scan", Fore.BLUE)
     out = capsys.readouterr().out
     assert "[!] No targets found" in out
@@ -176,7 +159,7 @@ def test_scan_targets_no_targets_file(tmp_path, capsys):
 
 
 def test_main_menu_exit(monkeypatch, capsys):
-    # Choose '3' to exit immediately
+    """Selecting '3' exits the main menu."""
     user_inputs = _inputs("3")
     monkeypatch.setattr(builtins, "input", lambda _: next(user_inputs))
     fnw.main_menu()

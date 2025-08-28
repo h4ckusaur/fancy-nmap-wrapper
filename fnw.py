@@ -1,4 +1,14 @@
 #!/usr/bin/env python3
+"""
+fnw.py - Fancy Nmap Wrapper.
+
+Multi-mode network scanner supporting:
+- TCP and UDP scans
+- Host discovery via ping sweep
+- Interactive scan selection
+- JSON output of results
+"""
+
 import os
 import sys
 import json
@@ -86,12 +96,13 @@ COLORAMA_TO_TQDM = {
 
 
 def load_config():
+    """Load configuration from config.json or create default config file."""
     if not os.path.exists(CONFIG_FILE):
         with open(CONFIG_FILE, "w") as f:
             json.dump(DEFAULT_CONFIG, f, indent=4)
         print(
-            f"{Fore.YELLOW}[!] Config file created:"
-            "{CONFIG_FILE}. Please review and restart."
+            f"{Fore.YELLOW}[!] Config file created: {CONFIG_FILE}. "
+            "Please review and restart."
         )
         sys.exit(1)
     with open(CONFIG_FILE, "r") as f:
@@ -111,8 +122,8 @@ logging.basicConfig(
 Path(config["output_directory"]).mkdir(parents=True, exist_ok=True)
 
 
-# ASCII banner
 def show_banner():
+    """Display ASCII banner for Fancy Nmap Wrapper."""
     banner = pyfiglet.figlet_format("Fancy Nmap Wrapper")
     print(Fore.CYAN + banner)
     print(Fore.GREEN + "Multi-Mode Network Scanner with Style!")
@@ -120,6 +131,12 @@ def show_banner():
 
 
 def get_scan_type():
+    """
+    Prompt the user to select scan type (internal or external).
+
+    Returns:
+        str: "internal" or "external"
+    """
     while True:
         print(Fore.CYAN + "\nSelect scan type:")
         print("1. Internal")
@@ -133,8 +150,16 @@ def get_scan_type():
             print(Fore.RED + "Invalid selection. Try again.")
 
 
-# Ping sweep function
 def ping_host(host):
+    """
+    Ping a single host to check if it is reachable.
+
+    Args:
+        host (str): IP address of the host.
+
+    Returns:
+        str or None: Returns host if reachable, else None.
+    """
     result = subprocess.run(
         ["ping", "-c", "1", "-W", "1", host], stdout=subprocess.DEVNULL
     )
@@ -144,6 +169,12 @@ def ping_host(host):
 
 
 def discovery(subnets):
+    """
+    Perform a ping sweep on a list of subnets to discover reachable hosts.
+
+    Args:
+        subnets (list of str): List of subnet strings (CIDR notation).
+    """
     print(Fore.CYAN + "\n=== Starting Host Discovery (Ping Sweep) ===\n")
     targets_file = os.path.join(config["output_directory"], "targets.txt")
 
@@ -158,10 +189,7 @@ def discovery(subnets):
 
     reachable = []
     with ThreadPoolExecutor(max_workers=config["thread_count"]) as executor:
-        futures = {
-            executor.submit(
-                ping_host,
-                host): host for host in all_hosts}
+        futures = {executor.submit(ping_host, host): host for host in all_hosts}
         pbar = tqdm(
             as_completed(futures),
             total=len(futures),
@@ -180,8 +208,7 @@ def discovery(subnets):
         for ip in reachable:
             f.write(ip + "\n")
 
-    print(Fore.GREEN +
-          f"\n[+] Discovery complete. {len(reachable)} hosts reachable.")
+    print(Fore.GREEN + f"\n[+] Discovery complete. {len(reachable)} hosts reachable.")
     logging.info(f"Discovery complete: {len(reachable)} hosts found.")
     summary_data.append(
         {
@@ -192,8 +219,17 @@ def discovery(subnets):
     )
 
 
-# TCP scan
 def tcp_scan(ip, scan_type):
+    """
+    Perform a TCP port scan using nmap.
+
+    Args:
+        ip (str): Target IP address.
+        scan_type (str): Mode, either 'internal' or 'external'.
+
+    Returns:
+        dict: Contains 'ip', 'type', 'output', 'file'.
+    """
     outfile = os.path.join(
         config["output_directory"], f"portscan_{scan_type}_tcp_{ip}.txt"
     )
@@ -205,8 +241,17 @@ def tcp_scan(ip, scan_type):
     return {"ip": ip, "type": "tcp", "output": result.stdout, "file": outfile}
 
 
-# UDP scan
 def udp_scan(ip, scan_type):
+    """
+    Perform a UDP port scan using nmap.
+
+    Args:
+        ip (str): Target IP address.
+        scan_type (str): Mode, either 'internal' or 'external'.
+
+    Returns:
+        dict: Contains 'ip', 'type', 'output', 'file'.
+    """
     outfile = os.path.join(
         config["output_directory"], f"portscan_{scan_type}_udp_{ip}.txt"
     )
@@ -220,6 +265,18 @@ def udp_scan(ip, scan_type):
 
 
 def scan_targets(scan_func, scan_type, scan_label, color):
+    """
+    Run a scan function on all targets in targets.txt.
+
+    Args:
+        scan_func (function): The scan function to execute (tcp_scan/udp_scan).
+        scan_type (str): Mode, 'internal' or 'external'.
+        scan_label (str): Human-readable label for the scan.
+        color (str): Colorama color for tqdm display.
+
+    Returns:
+        list: List of scan result dictionaries.
+    """
     targets_file = os.path.join(config["output_directory"], "targets.txt")
     if not os.path.exists(targets_file):
         print(Fore.RED + "[!] No targets found. Run discovery first.")
@@ -232,11 +289,7 @@ def scan_targets(scan_func, scan_type, scan_label, color):
     results = []
     tqdm_color = COLORAMA_TO_TQDM.get(color, "CYAN")
     with ThreadPoolExecutor(max_workers=config["thread_count"]) as executor:
-        futures = {
-            executor.submit(
-                scan_func,
-                ip,
-                scan_type): ip for ip in targets}
+        futures = {executor.submit(scan_func, ip, scan_type): ip for ip in targets}
         pbar = tqdm(
             as_completed(futures),
             total=len(futures),
@@ -254,8 +307,8 @@ def scan_targets(scan_func, scan_type, scan_label, color):
     if config["enable_json"]:
         json_file = os.path.join(
             config["output_directory"],
-            f"results_{scan_type}_{
-                scan_label.lower()}.json")
+            f"results_{scan_type}_{scan_label.lower()}.json",
+        )
         with open(json_file, "w") as jf:
             json.dump(results, jf, indent=4)
         files_created.append(json_file)
@@ -271,8 +324,13 @@ def scan_targets(scan_func, scan_type, scan_label, color):
     return results
 
 
-# Collect scan choices interactively
 def collect_scan_choices():
+    """
+    Interactively prompt the user to select scans to perform.
+
+    Returns:
+        list: List of dictionaries describing selected scans.
+    """
     selected_scans = []
 
     while True:
@@ -289,8 +347,8 @@ def collect_scan_choices():
                 print(Fore.RED + "[!] Only one discovery scan is allowed.")
             else:
                 subnets = input(
-                    Fore.YELLOW +
-                    "Enter subnets for discovery (comma-separated): ").strip()
+                    Fore.YELLOW + "Enter subnets for discovery (comma-separated): "
+                ).strip()
                 selected_scans.append(
                     {
                         "type": "discovery",
@@ -319,10 +377,7 @@ def collect_scan_choices():
         print(Fore.MAGENTA + "\n=== Current Scan Selections ===")
         for idx, scan in enumerate(selected_scans, start=1):
             if scan["type"] == "discovery":
-                print(
-                    f"{idx}. Discovery | Subnets: {
-                        ', '.join(
-                            scan['subnets'])}")
+                print(f"{idx}. Discovery | Subnets: {', '.join(scan['subnets'])}")
             else:
                 print(f"{idx}. {scan['type'].upper()} | Mode: {scan['mode']}")
         print(Fore.MAGENTA + "================================\n")
@@ -338,17 +393,19 @@ def collect_scan_choices():
     return selected_scans
 
 
-# Run selected scans in correct order
 def run_selected_scans(scan_choices):
+    """
+    Execute selected scans in the proper order.
+
+    Args:
+        scan_choices (list): List of scan dictionaries from collect_scan_choices().
+    """
     print(Fore.CYAN + "\n=== Preparing to Run Selected Scans ===")
-    discovery_scan = next(
-        (s for s in scan_choices if s["type"] == "discovery"), None)
+    discovery_scan = next((s for s in scan_choices if s["type"] == "discovery"), None)
     other_scans = [s for s in scan_choices if s["type"] != "discovery"]
 
     if discovery_scan:
-        print(
-            Fore.YELLOW +
-            "[!] Discovery must complete before other scans can start.")
+        print(Fore.YELLOW + "[!] Discovery must complete before other scans can start.")
         discovery(discovery_scan["subnets"])
 
     for scan in other_scans:
@@ -362,6 +419,7 @@ def run_selected_scans(scan_choices):
 
 
 def show_summary_report():
+    """Display a summary report of all completed scans."""
     print(Fore.CYAN + "\n=== Scan Summary Report ===\n")
     table = PrettyTable()
     table.field_names = ["Scan Type", "Details", "Files Created"]
@@ -373,17 +431,16 @@ def show_summary_report():
 
 
 def parse_args():
+    """Parse command-line arguments and update config accordingly."""
     parser = argparse.ArgumentParser(description="Fancy Scanner")
-    parser.add_argument(
-        "--json",
-        action="store_true",
-        help="Enable JSON output")
+    parser.add_argument("--json", action="store_true", help="Enable JSON output")
     args = parser.parse_args()
     if args.json:
         config["enable_json"] = True
 
 
 def main_menu():
+    """Display main menu and handle user selections."""
     while True:
         show_banner()
         print(Fore.CYAN + "1. Configure and Run Scans")

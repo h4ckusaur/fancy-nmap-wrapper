@@ -1,4 +1,13 @@
 #!/usr/bin/env python3
+"""
+Installer script for Fancy Nmap Wrapper (fnw).
+
+This script checks Python version, ensures required dependencies
+are installed, optionally creates a virtual environment, and
+guides the user through setup. It also provides options to install
+pytest if not already available.
+"""
+
 import sys
 import shutil
 import subprocess
@@ -12,19 +21,19 @@ REQUIREMENTS = ["tqdm", "colorama", "pyfiglet", "prettytable", "pytest-cov"]
 
 
 def check_python_version():
+    """Exit if the Python interpreter is below the minimum required version."""
     if sys.version_info < MIN_PYTHON:
-        print(
-            f"❌ Python {
-                MIN_PYTHON[0]}.{
-                MIN_PYTHON[1]} or higher is required.")
+        print(f"❌ Python {MIN_PYTHON[0]}.{MIN_PYTHON[1]} or higher is required.")
         sys.exit(1)
 
 
 def check_apt_available():
+    """Return True if the 'apt' package manager is available on the system."""
     return shutil.which("apt") is not None
 
 
 def create_requirements_file():
+    """Create a requirements.txt file if it does not already exist."""
     req_file = Path("requirements.txt")
     if not req_file.exists():
         with open(req_file, "w") as f:
@@ -36,6 +45,7 @@ def create_requirements_file():
 
 
 def print_venv_guide(venv_path):
+    """Print instructions for activating and using the virtual environment."""
     print("\n💡 Virtual Environment Usage Guide:")
     print(f"1. Activate the venv: source {venv_path}/bin/activate")
     print("2. Install dependencies: pip install -r requirements.txt")
@@ -44,38 +54,44 @@ def print_venv_guide(venv_path):
 
 
 def create_venv(venv_path):
+    """Create a Python virtual environment and install dependencies.
+
+    Args:
+        venv_path (Path): Path where the virtual environment should be created.
+    """
     print(f"\n🐍 Creating virtual environment at {venv_path} ...")
     subprocess.run([sys.executable, "-m", "venv", str(venv_path)])
-    subprocess.run([str(venv_path / "bin" / "python"), "-m",
-                    "pip", "install", "--upgrade", "pip"])
+    subprocess.run(
+        [str(venv_path / "bin" / "python"), "-m", "pip", "install", "--upgrade", "pip"]
+    )
     subprocess.run(
         [str(venv_path / "bin" / "pip"), "install", "-r", "requirements.txt"]
     )
     print("✅ Dependencies installed inside the virtual environment.")
     print_venv_guide(venv_path)
-    # Offer immediate activation
     activate_now = (
-        input("Would you like to activate the venv now? "
-              "(y/n): ").strip().lower())
+        input("Would you like to activate the venv now? (y/n): ").strip().lower()
+    )
     if activate_now == "y":
         shell = os.environ.get("SHELL", "/bin/bash")
         subprocess.run(
-            [shell,
-             "-i",
-             "-c",
-             f"source {venv_path}/bin/activate && exec {shell}"]
+            [shell, "-i", "-c", f"source {venv_path}/bin/activate && exec {shell}"]
         )
     else:
-        print(
-            f"You can activate it later with: source "
-            f"{venv_path}/bin/activate\n")
+        print(f"You can activate it later with: source {venv_path}/bin/activate\n")
 
 
 def check_pytest_installed():
+    """Return True if pytest is installed on the system."""
     return importlib.util.find_spec("pytest") is not None
 
 
 def detect_package_manager():
+    """Detect available package managers on the system.
+
+    Returns:
+        list: Names of available package managers (pip, apt, brew, conda).
+    """
     managers = []
     if shutil.which("pip"):
         managers.append("pip")
@@ -89,6 +105,11 @@ def detect_package_manager():
 
 
 def install_pytest(manager):
+    """Install pytest using the specified package manager.
+
+    Args:
+        manager (str): Name of the package manager to use.
+    """
     print(f"Installing pytest using {manager} ...")
     if manager == "pip":
         subprocess.run([sys.executable, "-m", "pip", "install", "pytest"])
@@ -102,13 +123,12 @@ def install_pytest(manager):
 
 
 def main():
+    """Run the interactive installer for Fancy Nmap Wrapper."""
     check_python_version()
     print("🛠 Fancy Nmap Wrapper Installer\n")
 
-    # Step 0: Ensure requirements.txt exists
     create_requirements_file()
 
-    # Step 1: venv vs apt
     apt_available = check_apt_available()
     if apt_available:
         print("Choose installation method:")
@@ -166,14 +186,12 @@ def main():
         print("❌ Invalid choice or apt not available. Exiting installer.")
         sys.exit(1)
 
-    # Step 2: Check pytest
     if not check_pytest_installed():
         managers = detect_package_manager()
         if managers:
             for mgr in managers:
                 choice = (
-                    input(f"pytest is not installed. Install it "
-                          f"using {mgr}? (y/n): ")
+                    input(f"pytest is not installed. Install it using {mgr}? (y/n): ")
                     .strip()
                     .lower()
                 )
@@ -181,11 +199,9 @@ def main():
                     install_pytest(mgr)
                     break
             else:
-                print("No installation performed. Please install "
-                      "pytest manually.")
+                print("No installation performed. Please install pytest manually.")
         else:
-            print("No package managers detected. Please install "
-                  "pytest manually.")
+            print("No package managers detected. Please install pytest manually.")
     else:
         print("✅ pytest is already installed.")
 

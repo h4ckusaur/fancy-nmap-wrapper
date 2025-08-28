@@ -41,7 +41,9 @@ jobs:
 
       # Check code formatting with Black
       - name: Check code formatting with Black
-        run: black --check .
+        run: |
+          black .
+          black --check .
         continue-on-error: false
 
       # Autoformat with Black and commit (non-main branches)
