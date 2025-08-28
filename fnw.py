@@ -6,7 +6,8 @@ Multi-mode network scanner supporting:
 - TCP and UDP scans
 - Host discovery via ping sweep
 - Interactive scan selection
-- JSON output of results
+- Optional JSON output of results
+- Dynamic NSE support for UDP ports where applicable
 """
 
 import os
@@ -82,7 +83,7 @@ CONFIG_FILE = "config.json"
 # Global to collect summary info
 summary_data = []
 
-# Mapping Colorama colors to tqdm-compatible colors
+# Mapping Colorama colors to tqdm-compatible colours
 COLORAMA_TO_TQDM = {
     Fore.BLACK: "BLACK",
     Fore.RED: "RED",
@@ -92,6 +93,18 @@ COLORAMA_TO_TQDM = {
     Fore.MAGENTA: "MAGENTA",
     Fore.CYAN: "CYAN",
     Fore.WHITE: "WHITE",
+}
+
+# Map UDP ports to NSE scripts (extend as desired)
+UDP_NSE_SCRIPTS = {
+    53: "dns-recursion,dns-nsid",
+    69: "tftp-enum",
+    123: "ntp-info,ntp-monlist",
+    161: "snmp-info,snmp-interfaces",
+    514: "syslog",
+    500: "ike-version",
+    1900: "upnp-info",
+    5353: "mdns-info",  # if mdns is included in udp_ports
 }
 
 
@@ -118,12 +131,12 @@ logging.basicConfig(
     format="%(asctime)s - %(levelname)s - %(message)s",
 )
 
-# Create output directory
+# Ensure output directory exists
 Path(config["output_directory"]).mkdir(parents=True, exist_ok=True)
 
 
 def show_banner():
-    """Display ASCII banner for Fancy Nmap Wrapper."""
+    """Display the ASCII banner and basic header text."""
     banner = pyfiglet.figlet_format("Fancy Nmap Wrapper")
     print(Fore.CYAN + banner)
     print(Fore.GREEN + "Multi-Mode Network Scanner with Style!")
@@ -132,10 +145,10 @@ def show_banner():
 
 def get_scan_type():
     """
-    Prompt the user to select scan type (internal or external).
+    Ask user to choose between internal or external scanning mode.
 
     Returns:
-        str: "internal" or "external"
+        str: "internal" or "external".
     """
     while True:
         print(Fore.CYAN + "\nSelect scan type:")
@@ -144,28 +157,25 @@ def get_scan_type():
         choice = input(Fore.YELLOW + "Choose an option: ").strip()
         if choice == "1":
             return "internal"
-        elif choice == "2":
+        if choice == "2":
             return "external"
-        else:
-            print(Fore.RED + "Invalid selection. Try again.")
+        print(Fore.RED + "Invalid selection. Try again.")
 
 
 def ping_host(host):
     """
-    Ping a single host to check if it is reachable.
+    Ping a host once to determine reachability.
 
     Args:
-        host (str): IP address of the host.
+        host (str): IP address string.
 
     Returns:
-        str or None: Returns host if reachable, else None.
+        str|None: host on success, None on failure.
     """
     result = subprocess.run(
         ["ping", "-c", "1", "-W", "1", host], stdout=subprocess.DEVNULL
     )
-    if result.returncode == 0:
-        return host
-    return None
+    return host if result.returncode == 0 else None
 
 
 def discovery(subnets):
@@ -173,7 +183,7 @@ def discovery(subnets):
     Perform a ping sweep on a list of subnets to discover reachable hosts.
 
     Args:
-        subnets (list of str): List of subnet strings (CIDR notation).
+        subnets (list[str]): list of CIDR subnet strings.
     """
     print(Fore.CYAN + "\n=== Starting Host Discovery (Ping Sweep) ===\n")
     targets_file = os.path.join(config["output_directory"], "targets.txt")
@@ -202,7 +212,7 @@ def discovery(subnets):
             if result:
                 reachable.append(result)
         pbar.close()
-        print()  # Ensure user input is visible following the scan
+        print()  # ensure user prompt appears cleanly after progress
 
     with open(targets_file, "w") as f:
         for ip in reachable:
@@ -221,19 +231,19 @@ def discovery(subnets):
 
 def tcp_scan(ip, scan_type):
     """
-    Perform a TCP port scan using nmap.
+    Run a TCP scan against a single IP using configured nmap flags.
 
     Args:
-        ip (str): Target IP address.
-        scan_type (str): Mode, either 'internal' or 'external'.
+        ip (str): Target IP.
+        scan_type (str): 'internal' or 'external'.
 
     Returns:
-        dict: Contains 'ip', 'type', 'output', 'file'.
+        dict: Scan result metadata including output file path.
     """
     outfile = os.path.join(
         config["output_directory"], f"portscan_{scan_type}_tcp_{ip}.txt"
     )
-    cmd = f"nmap {config['nmap_flags_tcp']} {ip}"
+    cmd = f"nmap {config.get('nmap_flags_tcp', DEFAULT_CONFIG['nmap_flags_tcp'])} {ip}"
     result = subprocess.run(cmd.split(), capture_output=True, text=True)
     with lock:
         with open(outfile, "w") as f:
@@ -246,17 +256,36 @@ def udp_scan(ip, scan_type):
     Perform a UDP port scan using nmap.
 
     Args:
-        ip (str): Target IP address.
-        scan_type (str): Mode, either 'internal' or 'external'.
+        ip (str): Target IP.
+        scan_type (str): 'internal' or 'external'.
 
     Returns:
-        dict: Contains 'ip', 'type', 'output', 'file'.
+        dict: Scan result metadata including output file path.
     """
     outfile = os.path.join(
         config["output_directory"], f"portscan_{scan_type}_udp_{ip}.txt"
     )
-    udp_ports = ",".join(map(str, config["udp_ports"]))
-    cmd = f"nmap -sU -p {udp_ports} {ip}"
+
+    # Build comma-separated list of UDP ports
+    udp_ports = ",".join(map(str, config.get("udp_ports", DEFAULT_CONFIG["udp_ports"])))
+
+    # Collect NSE scripts relevant to the configured UDP ports
+    scripts_set = []
+    for port in config.get("udp_ports", []):
+        if port in UDP_NSE_SCRIPTS:
+            scripts_set.extend([s.strip() for s in UDP_NSE_SCRIPTS[port].split(",")])
+
+    scripts_arg = ""
+    if scripts_set:
+        # Avoid duplicates and build script list
+        unique_scripts = ",".join(sorted(set(scripts_set)))
+        scripts_arg = f"--script {unique_scripts}"
+
+    # Assemble command. Use explicit nmap_flags_udp if provided.
+    nmap_udp_flags = config.get("nmap_flags_udp", DEFAULT_CONFIG["nmap_flags_udp"])
+    cmd = f"nmap {nmap_udp_flags} -p {udp_ports} {scripts_arg} {ip}".strip()
+    # split() is sufficient here because scripts_arg contains no spaces except
+    # between flags
     result = subprocess.run(cmd.split(), capture_output=True, text=True)
     with lock:
         with open(outfile, "w") as f:
@@ -266,16 +295,13 @@ def udp_scan(ip, scan_type):
 
 def scan_targets(scan_func, scan_type, scan_label, color):
     """
-    Run a scan function on all targets in targets.txt.
+    Run the given scan function across all targets in targets.txt.
 
     Args:
-        scan_func (function): The scan function to execute (tcp_scan/udp_scan).
-        scan_type (str): Mode, 'internal' or 'external'.
-        scan_label (str): Human-readable label for the scan.
-        color (str): Colorama color for tqdm display.
-
-    Returns:
-        list: List of scan result dictionaries.
+        scan_func (callable): function(ip, scan_type) to run.
+        scan_type (str): 'internal' or 'external'.
+        scan_label (str): Human-friendly label for the scan.
+        color (str|colorama.Fore): color used for printing progress.
     """
     targets_file = os.path.join(config["output_directory"], "targets.txt")
     if not os.path.exists(targets_file):
@@ -283,9 +309,9 @@ def scan_targets(scan_func, scan_type, scan_label, color):
         return []
 
     with open(targets_file, "r") as f:
-        targets = [line.strip() for line in f]
+        targets = [line.strip() for line in f if line.strip()]
 
-    print(color + f"\n=== Starting {scan_label} ===\n")
+    print((color or "") + f"\n=== Starting {scan_label} ===\n")
     results = []
     tqdm_color = COLORAMA_TO_TQDM.get(color, "CYAN")
     with ThreadPoolExecutor(max_workers=config["thread_count"]) as executor:
@@ -300,14 +326,13 @@ def scan_targets(scan_func, scan_type, scan_label, color):
         for future in pbar:
             results.append(future.result())
         pbar.close()
-        print()  # Ensure user input is visible following the scan
+        print()  # keep input prompt visible
 
     files_created = [r["file"] for r in results]
 
-    if config["enable_json"]:
+    if config.get("enable_json"):
         json_file = os.path.join(
-            config["output_directory"],
-            f"results_{scan_type}_{scan_label.lower()}.json",
+            config["output_directory"], f"results_{scan_type}_{scan_label.lower()}.json"
         )
         with open(json_file, "w") as jf:
             json.dump(results, jf, indent=4)
@@ -326,10 +351,10 @@ def scan_targets(scan_func, scan_type, scan_label, color):
 
 def collect_scan_choices():
     """
-    Interactively prompt the user to select scans to perform.
+    Interactively collect scans the user wants to run.
 
     Returns:
-        list: List of dictionaries describing selected scans.
+        list[dict]: Selected scans where each dict describes the scan.
     """
     selected_scans = []
 
@@ -356,17 +381,14 @@ def collect_scan_choices():
                     }
                 )
                 print(Fore.GREEN + "[+] Discovery scan added.")
-
         elif choice == "2":
             mode = get_scan_type()
             selected_scans.append({"type": "tcp", "mode": mode})
             print(Fore.GREEN + f"[+] TCP scan ({mode}) added.")
-
         elif choice == "3":
             mode = get_scan_type()
             selected_scans.append({"type": "udp", "mode": mode})
             print(Fore.GREEN + f"[+] UDP scan ({mode}) added.")
-
         elif choice == "4":
             break
         else:
@@ -398,7 +420,7 @@ def run_selected_scans(scan_choices):
     Execute selected scans in the proper order.
 
     Args:
-        scan_choices (list): List of scan dictionaries from collect_scan_choices().
+        scan_choices (list[dict]): result from collect_scan_choices().
     """
     print(Fore.CYAN + "\n=== Preparing to Run Selected Scans ===")
     discovery_scan = next((s for s in scan_choices if s["type"] == "discovery"), None)
@@ -419,7 +441,7 @@ def run_selected_scans(scan_choices):
 
 
 def show_summary_report():
-    """Display a summary report of all completed scans."""
+    """Print a PrettyTable summary of scans completed and files written."""
     print(Fore.CYAN + "\n=== Scan Summary Report ===\n")
     table = PrettyTable()
     table.field_names = ["Scan Type", "Details", "Files Created"]
@@ -431,7 +453,7 @@ def show_summary_report():
 
 
 def parse_args():
-    """Parse command-line arguments and update config accordingly."""
+    """Parse CLI args and set config flags (currently --json)."""
     parser = argparse.ArgumentParser(description="Fancy Scanner")
     parser.add_argument("--json", action="store_true", help="Enable JSON output")
     args = parser.parse_args()
@@ -440,7 +462,7 @@ def parse_args():
 
 
 def main_menu():
-    """Display main menu and handle user selections."""
+    """Present the interactive main menu to the user."""
     while True:
         show_banner()
         print(Fore.CYAN + "1. Configure and Run Scans")
