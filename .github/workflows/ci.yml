@@ -26,14 +26,18 @@ jobs:
       # Install dependencies
       - name: Install dependencies
         run: |
+          pip install flake8==6.1.0
           python -m pip install --upgrade pip
           pip install -r requirements.txt
           pip install pytest pytest-cov black flake8
 
       # Lint with Flake8
       - name: Lint with Flake8
-        run: flake8 .
-        continue-on-error: false
+        run: |
+          # Auto-fix trivial whitespace
+          find . -name "*.py" -exec sed -i 's/[ \t]*$//' {} \;
+          # Run Flake8
+          flake8 .
 
       # Check code formatting with Black
       - name: Check code formatting with Black
