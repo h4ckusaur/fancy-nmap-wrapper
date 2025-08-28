@@ -1,0 +1,33 @@
+name: Auto Format Python Code
+
+on:
+  push:
+    branches:
+      - main
+      - '**'   # optional: run on all branches
+  pull_request:
+    branches:
+      - main
+
+jobs:
+  format:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: 3.13
+
+      - name: Install dependencies
+        run: |
+          pip install black flake8
+
+      - name: Run Black autoformatter
+        run: |
+          black .
+
+      - name: Check Flake8
+        run: |
+          flake8 .

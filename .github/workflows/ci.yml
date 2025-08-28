@@ -41,15 +41,13 @@ jobs:
         continue-on-error: false
 
       # Autoformat with Black and commit (non-main branches)
-      - name: Autoformat with Black and commit (non-main)
-        if: github.ref != 'refs/heads/main'
+      - name: Commit auto-format changes
         run: |
           git config --global user.name "github-actions[bot]"
           git config --global user.email "github-actions[bot]@users.noreply.github.com"
-          black .
           git add .
-          git diff-index --quiet HEAD || git commit -m "Autoformat code with Black"
-          git push || echo "No changes to push"
+          git diff --quiet || git commit -m "Auto-format code with Black"
+          git push
 
       # Run tests with coverage
       - name: Run tests with coverage
