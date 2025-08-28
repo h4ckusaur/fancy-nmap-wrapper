@@ -62,6 +62,7 @@ cd fancy-nmap-wrapper
 ## ⚡ Configuration
 
 - **Sample Configuration File**
+```bash
 {
     "thread_count": 10,
     "enable_json": false,
@@ -70,6 +71,7 @@ cd fancy-nmap-wrapper
     "nmap_flags_tcp": "-sT -sC -sV -A -Pn -p1-65535",
     "nmap_flags_udp": "-sU --top-ports 50"
 }
+```
 
 - **Regenerate the Default Configuration**
 
