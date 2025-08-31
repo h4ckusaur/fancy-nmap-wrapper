@@ -122,12 +122,45 @@ def install_pytest(manager):
     print("✅ pytest installed.")
 
 
+def install_requirements_as_root():
+    """Install requirements globally as root using pip."""
+    print("\n🔐 Installing Python dependencies globally for root user...")
+    try:
+        subprocess.run(
+            ["sudo", "pip3", "install", "-r", "requirements.txt"], check=True
+        )
+        print("✅ Global installation complete. Root user can now run the scanner.")
+    except subprocess.CalledProcessError:
+        print(
+            "❌ Failed to install packages globally. Please check your"
+            "sudo privileges."
+        )
+
+
 def main():
     """Run the interactive installer for Fancy Nmap Wrapper."""
     check_python_version()
     print("🛠 Fancy Nmap Wrapper Installer\n")
 
     create_requirements_file()
+
+    # Ask if user wants to install requirements globally for root
+    global_install_choice = (
+        input(
+            "Would you like to also install dependencies globally for root?"
+            "This allows the use of raw sockets, potentially improving scan"
+            "output. (y/n): "
+        )
+        .strip()
+        .lower()
+    )
+    if global_install_choice == "y":
+        install_requirements_as_root()
+    else:
+        print(
+            "Skipping global installation. Root will not have dependencies"
+            "unless you install them manually.\n"
+        )
 
     apt_available = check_apt_available()
     if apt_available:

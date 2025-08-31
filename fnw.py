@@ -101,7 +101,7 @@ UDP_NSE_SCRIPTS = {
     69: "tftp-enum",
     123: "ntp-info,ntp-monlist",
     161: "snmp-info,snmp-interfaces",
-    514: "syslog",
+    514: "syslog-brute,syslog-message",
     500: "ike-version",
     1900: "upnp-info",
     5353: "mdns-info",  # if mdns is included in udp_ports
@@ -178,6 +178,14 @@ def ping_host(host):
     return host if result.returncode == 0 else None
 
 
+def write_command_header(filepath, cmd):
+    """Prepend the executed command as a header to the output file."""
+    header = (
+        "===== Executed Command =====\n" f"{cmd}\n" "============================\n\n"
+    )
+    return header
+
+
 def discovery(subnets):
     """
     Perform a ping sweep on a list of subnets to discover reachable hosts.
@@ -247,6 +255,8 @@ def tcp_scan(ip, scan_type):
     result = subprocess.run(cmd.split(), capture_output=True, text=True)
     with lock:
         with open(outfile, "w") as f:
+            f.write(write_command_header(outfile, cmd))  # Prettified header
+            f.write(result.stderr)
             f.write(result.stdout)
     return {"ip": ip, "type": "tcp", "output": result.stdout, "file": outfile}
 
@@ -289,6 +299,8 @@ def udp_scan(ip, scan_type):
     result = subprocess.run(cmd.split(), capture_output=True, text=True)
     with lock:
         with open(outfile, "w") as f:
+            f.write(write_command_header(outfile, cmd))  # Prettified header
+            f.write(result.stderr)
             f.write(result.stdout)
     return {"ip": ip, "type": "udp", "output": result.stdout, "file": outfile}
 

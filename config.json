@@ -9,5 +9,5 @@
         49166, 49167, 49168, 49169, 49170
     ],
     "nmap_flags_tcp": "-sT -sC -sV -A -Pn -p1-65535",
-    "nmap_flags_udp": "-sU --top-ports 50"
+    "nmap_flags_udp": "-sU -Pn --top-ports 50"
 }

@@ -5,7 +5,6 @@ import builtins
 import pytest
 from unittest.mock import patch
 from colorama import Fore
-
 import fnw
 from fnw import collect_scan_choices, run_selected_scans, scan_targets
 
@@ -165,3 +164,46 @@ def test_main_menu_exit(monkeypatch, capsys):
     fnw.main_menu()
     out = capsys.readouterr().out
     assert "Exiting..." in out
+
+
+# ---- Additional tests to boost coverage ----
+
+
+def test_write_command_header_creates_header():
+    """Ensure write_command_header returns expected header string."""
+    cmd = "nmap -sT 127.0.0.1"
+    header = fnw.write_command_header("dummy.txt", cmd)
+    assert "Executed Command" in header
+    assert cmd in header
+
+
+def test_show_banner_outputs(capsys):
+    """Ensure show_banner prints banner without errors."""
+    fnw.show_banner()
+    out = capsys.readouterr().out
+    # Instead of checking for exact figlet text, check the tagline
+    # which is always printed
+    assert "Multi-Mode Network Scanner with Style!" in out
+
+
+def test_show_summary_report_with_data(capsys):
+    """Ensure summary report prints table with expected fields."""
+    fnw.summary_data.append(
+        {
+            "Scan Type": "TCP Scan",
+            "Details": "Mode: internal | Hosts: 1",
+            "Files": ["dummy.txt"],
+        }
+    )
+    fnw.show_summary_report()
+    out = capsys.readouterr().out
+    assert "Scan Summary Report" in out
+    assert "TCP Scan" in out
+    fnw.summary_data.clear()
+
+
+def test_parse_args_enables_json(monkeypatch):
+    """Ensure parse_args sets enable_json when flag provided."""
+    monkeypatch.setattr("sys.argv", ["prog", "--json"])
+    fnw.parse_args()
+    assert fnw.config["enable_json"] is True
