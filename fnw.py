@@ -305,8 +305,10 @@ def scan_targets(scan_func, scan_type, scan_label, color):
     """
     targets_file = os.path.join(config["output_directory"], "targets.txt")
     if not os.path.exists(targets_file):
-        print(Fore.RED + "[!] No targets found. Run discovery first.")
-        return []
+        targets_file = os.path.join(os.getcwd(), "targets.txt")
+        if not os.path.exists(targets_file):
+            print(Fore.RED + "[!] No targets found. Run discovery first.")
+            return []
 
     with open(targets_file, "r") as f:
         targets = [line.strip() for line in f if line.strip()]
