@@ -24,6 +24,7 @@ import argparse
 import logging
 from pathlib import Path
 from prettytable import PrettyTable
+import time
 
 # Initialize colorama
 init(autoreset=True)
@@ -185,6 +186,72 @@ def write_command_header(filepath, cmd):
     return header
 
 
+def handle_blacklist(targets_file):
+    """
+    Create a list of blacklisted IPs and subnets.
+
+    Args:
+        targets_file (str): file to write discovery output.
+    """
+    blacklist_file = None
+    for path in [config["output_directory"], os.getcwd()]:
+        candidate = os.path.join(path, "blacklist.txt")
+        if os.path.exists(candidate):
+            blacklist_file = candidate
+            print(Fore.YELLOW + f"[!] Found existing blacklist at {candidate}")
+            break
+
+    blacklist_entries = []
+    if blacklist_file:
+        with open(blacklist_file, "r") as f:
+            blacklist_entries = [line.strip() for line in f if line.strip()]
+    else:
+        choice = (
+            input(Fore.YELLOW + "No blacklist.txt found. Create one? (y/n): ")
+            .strip()
+            .lower()
+        )
+        if choice == "y":
+            blacklist_file = os.path.join(config["output_directory"], "blacklist.txt")
+            while True:
+                entry = input(Fore.YELLOW + "Enter IP or CIDR to blacklist: ").strip()
+                if entry:
+                    blacklist_entries.append(entry)
+                    with open(blacklist_file, "a") as bf:
+                        bf.write(entry + "\n")
+                if (
+                    input(Fore.YELLOW + "Done entering blacklist entries? (y/n): ")
+                    .strip()
+                    .lower()
+                    == "y"
+                ):
+                    break
+    if os.path.exists(targets_file):
+        with open(targets_file, "r") as f:
+            blacklist_entries += [line.strip() for line in f if line.strip()]
+    return blacklist_entries
+
+
+def is_blacklisted(ip, blacklist_entries):
+    """
+    Determine whether an ip is blacklisted and prevent a scan against it.
+
+    Args:
+        ip (str): ip or CIDR string.
+        blacklist_entries (list[str]): blacklisted entries.
+    """
+    ip_obj = ipaddress.ip_address(ip)
+    for entry in blacklist_entries:
+        try:
+            if "/" in entry and ip_obj in ipaddress.ip_network(entry, strict=False):
+                return True
+            if ip == entry:
+                return True
+        except Exception:
+            continue
+    return False
+
+
 def discovery(subnets):
     """
     Perform a ping sweep on a list of subnets to discover reachable hosts.
@@ -193,20 +260,23 @@ def discovery(subnets):
         subnets (list[str]): list of CIDR subnet strings.
     """
     print(Fore.CYAN + "\n=== Starting Host Discovery (Ping Sweep) ===\n")
-    targets_file = os.path.join(config["output_directory"], "targets.txt")
 
+    targets_file = os.path.join(config["output_directory"], "targets.txt")
+    open(targets_file, "a").close()
+    blacklist_entries = handle_blacklist(targets_file)
     all_hosts = []
     for subnet in subnets:
         try:
-            net = ipaddress.ip_network(subnet, strict=False)
-            all_hosts.extend([str(ip) for ip in net.hosts()])
-        except ValueError:
+            all_hosts.extend(
+                [str(ip) for ip in ipaddress.ip_network(subnet, strict=False).hosts()]
+            )
+        except Exception:
             print(Fore.RED + f"Invalid subnet: {subnet}")
             return
 
     reachable = []
     with ThreadPoolExecutor(max_workers=config["thread_count"]) as executor:
-        futures = {executor.submit(ping_host, host): host for host in all_hosts}
+        futures = {executor.submit(ping_host, ip): ip for ip in all_hosts}
         pbar = tqdm(
             as_completed(futures),
             total=len(futures),
@@ -216,12 +286,12 @@ def discovery(subnets):
         )
         for future in pbar:
             result = future.result()
-            if result:
+            if result and not is_blacklisted(result, blacklist_entries):
                 reachable.append(result)
         pbar.close()
-        print()  # ensure user prompt appears cleanly after progress
+        print()
 
-    with open(targets_file, "w") as f:
+    with open(targets_file, "a") as f:
         for ip in reachable:
             f.write(ip + "\n")
 
@@ -253,10 +323,9 @@ def tcp_scan(ip, scan_type):
     cmd = f"nmap {config.get('nmap_flags_tcp', DEFAULT_CONFIG['nmap_flags_tcp'])} {ip}"
     result = subprocess.run(cmd.split(), capture_output=True, text=True)
     with lock:
-        with open(outfile, "w") as f:
-            f.write(write_command_header(outfile, cmd))  # Prettified header
-            f.write(result.stderr)
-            f.write(result.stdout)
+        open(outfile, "w").write(
+            write_command_header(outfile, cmd) + result.stderr + result.stdout
+        )
     return {"ip": ip, "type": "tcp", "output": result.stdout, "file": outfile}
 
 
@@ -274,97 +343,164 @@ def udp_scan(ip, scan_type):
     outfile = os.path.join(
         config["output_directory"], f"portscan_{scan_type}_udp_{ip}.txt"
     )
-
-    # Build comma-separated list of UDP ports
     udp_ports = ",".join(map(str, config.get("udp_ports", DEFAULT_CONFIG["udp_ports"])))
-
-    # Collect NSE scripts relevant to the configured UDP ports
-    scripts_set = []
-    for port in config.get("udp_ports", []):
-        if port in UDP_NSE_SCRIPTS:
-            scripts_set.extend([s.strip() for s in UDP_NSE_SCRIPTS[port].split(",")])
-
-    scripts_arg = ""
-    if scripts_set:
-        # Avoid duplicates and build script list
-        unique_scripts = ",".join(sorted(set(scripts_set)))
-        scripts_arg = f"--script {unique_scripts}"
-
-    # Assemble command. Use explicit nmap_flags_udp if provided.
-    nmap_udp_flags = config.get("nmap_flags_udp", DEFAULT_CONFIG["nmap_flags_udp"])
-    cmd = f"nmap {nmap_udp_flags} -p {udp_ports} {scripts_arg} {ip}".strip()
-    # split() is sufficient here because scripts_arg contains no spaces except
-    # between flags
+    scripts_set = [
+        s
+        for port in config.get("udp_ports", [])
+        if port in UDP_NSE_SCRIPTS
+        for s in UDP_NSE_SCRIPTS[port].split(",")
+    ]
+    scripts_arg = (
+        f"--script {','.join(sorted(set(scripts_set)))}" if scripts_set else ""
+    )
+    cmd = (
+        f"nmap "
+        f"{config.get('nmap_flags_udp', DEFAULT_CONFIG['nmap_flags_udp'])} "
+        f"-p {udp_ports} {scripts_arg} {ip}"
+    ).strip()
     result = subprocess.run(cmd.split(), capture_output=True, text=True)
     with lock:
-        with open(outfile, "w") as f:
-            f.write(write_command_header(outfile, cmd))  # Prettified header
-            f.write(result.stderr)
-            f.write(result.stdout)
+        open(outfile, "w").write(
+            write_command_header(outfile, cmd) + result.stderr + result.stdout
+        )
     return {"ip": ip, "type": "udp", "output": result.stdout, "file": outfile}
 
 
-def scan_targets(scan_func, scan_type, scan_label, color):
+def scan_targets_parallel_separate(scan_type):
     """
-    Run the given scan function across all targets in targets.txt.
+    Perform tcp / udp scans concurrently.
 
     Args:
-        scan_func (callable): function(ip, scan_type) to run.
         scan_type (str): 'internal' or 'external'.
-        scan_label (str): Human-friendly label for the scan.
-        color (str|colorama.Fore): color used for printing progress.
+        scan_label (str): 'TCP' or 'UDP'
+        color (str): color based on scan_label.
+
+    Returns:
+        dict: Scan result metadata including output file path.
     """
-    targets_file = os.path.join(config["output_directory"], "targets.txt")
-    if not os.path.exists(targets_file):
-        targets_file = os.path.join(os.getcwd(), "targets.txt")
-        if not os.path.exists(targets_file):
-            print(Fore.RED + "[!] No targets found. Run discovery first.")
-            return []
+    targets_file = next(
+        (
+            os.path.join(p, "targets.txt")
+            for p in [config["output_directory"], os.getcwd()]
+            if os.path.exists(os.path.join(p, "targets.txt"))
+        ),
+        None,
+    )
+    if not targets_file:
+        print(Fore.RED + "[!] No targets found. Run discovery first.")
+        return []
 
     with open(targets_file, "r") as f:
         targets = [line.strip() for line in f if line.strip()]
 
-    print((color or "") + f"\n=== Starting {scan_label} ===\n")
     results = []
-    tqdm_color = COLORAMA_TO_TQDM.get(color, "CYAN")
-    with ThreadPoolExecutor(max_workers=config["thread_count"]) as executor:
-        futures = {executor.submit(scan_func, ip, scan_type): ip for ip in targets}
-        pbar = tqdm(
-            as_completed(futures),
-            total=len(futures),
-            desc=f"{scan_label} Progress",
-            colour=tqdm_color,
+    with ThreadPoolExecutor(max_workers=config["thread_count"] * 2) as executor:
+        tcp_futures = [executor.submit(tcp_scan, ip, scan_type) for ip in targets]
+        udp_futures = [executor.submit(udp_scan, ip, scan_type) for ip in targets]
+
+        tcp_bar = tqdm(
+            total=len(tcp_futures),
+            desc="TCP Scan",
+            colour="BLUE",
+            position=0,
+            leave=True,
             ncols=80,
         )
-        for future in pbar:
-            results.append(future.result())
-        pbar.close()
-        print()  # keep input prompt visible
+        udp_bar = tqdm(
+            total=len(udp_futures),
+            desc="UDP Scan",
+            colour="MAGENTA",
+            position=1,
+            leave=True,
+            ncols=80,
+        )
 
-    files_created = [r["file"] for r in results]
+        tcp_done = set()
+        udp_done = set()
 
+        while len(tcp_done) < len(tcp_futures) or len(udp_done) < len(udp_futures):
+            # Check TCP futures
+            for future in tcp_futures:
+                if future.done() and future not in tcp_done:
+                    try:
+                        results.append(future.result())
+                    except Exception as e:
+                        print(Fore.RED + f"[!] Error in TCP scan: {e}")
+                    tcp_done.add(future)
+                    tcp_bar.update(1)
+
+            # Check UDP futures
+            for future in udp_futures:
+                if future.done() and future not in udp_done:
+                    try:
+                        results.append(future.result())
+                    except Exception as e:
+                        print(Fore.RED + f"[!] Error in UDP scan: {e}")
+                    udp_done.add(future)
+                    udp_bar.update(1)
+
+            time.sleep(0.2)  # smooth updates without hogging CPU
+
+        tcp_bar.close()
+        udp_bar.close()
+
+    # JSON output if enabled
     if config.get("enable_json"):
         json_file = os.path.join(
-            config["output_directory"], f"results_{scan_type}_{scan_label.lower()}.json"
+            config["output_directory"], f"results_{scan_type}_tcp_udp.json"
         )
         with open(json_file, "w") as jf:
             json.dump(results, jf, indent=4)
-        files_created.append(json_file)
 
     summary_data.append(
         {
-            "Scan Type": scan_label,
+            "Scan Type": "TCP/UDP",
             "Details": f"Mode: {scan_type} | Hosts: {len(targets)}",
-            "Files": files_created,
+            "Files": [r["file"] for r in results],
         }
     )
 
     return results
 
 
-def collect_scan_choices():
+def get_targets_file():
     """
     Interactively collect scans the user wants to run.
+
+    Returns:
+        str|None: A valid file to store discovery output, or None
+            to indicate the user is okay removing the existing
+            targets file and creating a new one.
+    """
+    targets_file = None
+    for path in [config["output_directory"], os.getcwd()]:
+        candidate = os.path.join(path, "targets.txt")
+        if os.path.exists(candidate):
+            targets_file = candidate
+            print(
+                Fore.YELLOW + f"[!] Found existing targets.txt at {candidate} "
+                f"This file must be removed to continue. Otherwise you may "
+                f"perform TCP or UDP scans now."
+            )
+            choice = (
+                input(Fore.YELLOW + "Remove your current targets.txt? ").strip().lower()
+            )
+            if choice == "y":
+                os.remove(candidate)
+                targets_file = None
+                break
+            else:
+                print(Fore.GREEN + "Reusing existing targets.txt for now.")
+                break
+    return targets_file
+
+
+def collect_scan_choices(targets_file):
+    """
+    Interactively collect scans the user wants to run.
+
+    Args:
+        targets_file (str): File to store discovery output.
 
     Returns:
         list[dict]: Selected scans where each dict describes the scan.
@@ -379,21 +515,26 @@ def collect_scan_choices():
         print("4. Done selecting scans")
 
         choice = input(Fore.YELLOW + "Select an option: ").strip()
-
         if choice == "1":
-            if any(scan["type"] == "discovery" for scan in selected_scans):
-                print(Fore.RED + "[!] Only one discovery scan is allowed.")
+            if not targets_file:
+                if any(scan.get("type") == "discovery" for scan in selected_scans):
+                    print(Fore.RED + "[!] Only one discovery scan is allowed.")
+                else:
+                    subnets = input(
+                        Fore.YELLOW + "Enter subnets for discovery (comma-separated): "
+                    ).strip()
+                    selected_scans.append(
+                        {
+                            "type": "discovery",
+                            "subnets": [s.strip() for s in subnets.split(",")],
+                        }
+                    )
+                    print(Fore.GREEN + "[+] Discovery scan added.")
             else:
-                subnets = input(
-                    Fore.YELLOW + "Enter subnets for discovery (comma-separated): "
-                ).strip()
-                selected_scans.append(
-                    {
-                        "type": "discovery",
-                        "subnets": [s.strip() for s in subnets.split(",")],
-                    }
+                print(
+                    Fore.YELLOW + "[!] Discovery scan skipped. Feel free to add TCP "
+                    "or UDP scans using your pre-existing targets.txt file."
                 )
-                print(Fore.GREEN + "[+] Discovery scan added.")
         elif choice == "2":
             mode = get_scan_type()
             selected_scans.append({"type": "tcp", "mode": mode})
@@ -408,46 +549,64 @@ def collect_scan_choices():
             print(Fore.RED + "Invalid option. Try again.")
             continue
 
-        # Show current selections
         print(Fore.MAGENTA + "\n=== Current Scan Selections ===")
         for idx, scan in enumerate(selected_scans, start=1):
-            if scan["type"] == "discovery":
+            if scan.get("type") == "discovery":
                 print(f"{idx}. Discovery | Subnets: {', '.join(scan['subnets'])}")
             else:
                 print(f"{idx}. {scan['type'].upper()} | Mode: {scan['mode']}")
         print(Fore.MAGENTA + "================================\n")
 
-        more = (
-            input(Fore.YELLOW + "Would you like to add more scans? (y/n): ")
-            .strip()
-            .lower()
-        )
-        if more != "y":
+        more = None
+        while more != "y" and more != "n":
+            more = (
+                input(Fore.YELLOW + "Would you like to add more scans? (y/n): ")
+                .strip()
+                .lower()
+            )
+        if more == "n":
             break
 
     return selected_scans
 
 
-def run_selected_scans(scan_choices):
+def run_selected_scans(scan_choices, targets_file):
     """
     Execute selected scans in the proper order.
 
     Args:
         scan_choices (list[dict]): result from collect_scan_choices().
     """
-    print(Fore.CYAN + "\n=== Preparing to Run Selected Scans ===")
-    discovery_scan = next((s for s in scan_choices if s["type"] == "discovery"), None)
-    other_scans = [s for s in scan_choices if s["type"] != "discovery"]
+    ready = None
+    while ready is None:
+        ready = (
+            input(
+                Fore.RED + "Ready to initiate scans. Press [ENTER] to proceed, "
+                "or q to return to the main menu. "
+            )
+            .strip()
+            .lower()
+        )
+        if ready == "":
+            break
+        if ready == "q":
+            main_menu()
+        ready = None
+    print(Fore.CYAN + "\n=== Executing Selected Scans ===")
+    discovery_scan = next(
+        (s for s in scan_choices if s.get("type") == "discovery"), None
+    )
+    other_scans = [s for s in scan_choices if s.get("type") != "discovery"]
 
     if discovery_scan:
         print(Fore.YELLOW + "[!] Discovery must complete before other scans can start.")
         discovery(discovery_scan["subnets"])
 
     for scan in other_scans:
-        if scan["type"] == "tcp":
-            scan_targets(tcp_scan, scan["mode"], "TCP Scan", Fore.BLUE)
-        elif scan["type"] == "udp":
-            scan_targets(udp_scan, scan["mode"], "UDP Scan", Fore.MAGENTA)
+        scan_type_mode = scan.get("mode")
+
+        # Run TCP and UDP concurrently with separate progress bars
+        scan_targets_parallel_separate(scan_type_mode)
 
     print(Fore.GREEN + "\n[+] All selected scans have completed.\n")
     show_summary_report()
@@ -459,8 +618,8 @@ def show_summary_report():
     table = PrettyTable()
     table.field_names = ["Scan Type", "Details", "Files Created"]
     for entry in summary_data:
-        files_display = "\n".join(entry["Files"])
-        table.add_row([entry["Scan Type"], entry["Details"], files_display])
+        files_display = "\n".join(entry.get("Files", []))
+        table.add_row([entry.get("Scan Type"), entry.get("Details"), files_display])
     print(table)
     print(Fore.YELLOW + "\n[+] Summary report complete.\n")
 
@@ -482,11 +641,12 @@ def main_menu():
         print("2. View Config")
         print("3. Exit")
         choice = input(Fore.YELLOW + "Choose an option: ").strip()
+        targets_file = get_targets_file()
 
         if choice == "1":
-            scan_choices = collect_scan_choices()
+            scan_choices = collect_scan_choices(targets_file)
             if scan_choices:
-                run_selected_scans(scan_choices)
+                run_selected_scans(scan_choices, targets_file)
         elif choice == "2":
             print(json.dumps(config, indent=4))
         elif choice == "3":
