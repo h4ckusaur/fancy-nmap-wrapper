@@ -147,7 +147,7 @@ def main():
     # Ask if user wants to install requirements globally for root
     global_install_choice = (
         input(
-            "Would you like to also install dependencies globally for root?"
+            "Would you like to also install dependencies globally for root? "
             "This allows the use of raw sockets, potentially improving scan"
             "output. (y/n): "
         )
