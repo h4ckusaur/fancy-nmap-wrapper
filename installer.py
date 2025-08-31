@@ -122,19 +122,18 @@ def install_pytest(manager):
     print("✅ pytest installed.")
 
 
-def install_requirements_as_root():
-    """Install requirements globally as root using pip."""
-    print("\n🔐 Installing Python dependencies globally for root user...")
-    try:
-        subprocess.run(
-            ["sudo", "pip3", "install", "-r", "requirements.txt"], check=True
-        )
-        print("✅ Global installation complete. Root user can now run the scanner.")
-    except subprocess.CalledProcessError:
-        print(
-            "❌ Failed to install packages globally. Please check your"
-            "sudo privileges."
-        )
+def install_requirements_globally():
+    """Install requirements globally as root using apt."""
+    print("\nInstalling packages via apt...")
+    packages = [
+        "python3-tqdm",
+        "python3-colorama",
+        "python3-pyfiglet",
+        "python3-pytest",
+    ]
+    subprocess.run(["sudo", "apt", "update"])
+    subprocess.run(["sudo", "apt", "install", "-y"] + packages)
+    print("✅ Packages installed via apt.")
 
 
 def main():
@@ -145,25 +144,25 @@ def main():
     create_requirements_file()
 
     # Ask if user wants to install requirements globally for root
-    global_install_choice = (
-        input(
-            "Would you like to also install dependencies globally for root? "
-            "This allows the use of raw sockets, potentially improving scan"
-            "output. (y/n): "
-        )
-        .strip()
-        .lower()
-    )
-    if global_install_choice == "y":
-        install_requirements_as_root()
-    else:
-        print(
-            "Skipping global installation. Root will not have dependencies"
-            "unless you install them manually.\n"
-        )
-
     apt_available = check_apt_available()
+
     if apt_available:
+        global_install_choice = (
+            input(
+                "Would you like to also install dependencies globally for root? "
+                "This allows the use of raw sockets, potentially improving scan"
+                "output. (y/n): "
+            )
+            .strip()
+            .lower()
+        )
+        if global_install_choice == "y":
+            install_requirements_globally()
+        else:
+            print(
+                "Skipping global installation. Root will not have dependencies"
+                "unless you install them manually.\n"
+            )
         print("Choose installation method:")
         print("1) Python Virtual Environment (recommended)")
         print("2) Install system packages via apt (not recommended)")
@@ -205,16 +204,7 @@ def main():
             )
             print_venv_guide(venv_path)
     elif choice == "2" and apt_available:
-        print("\nInstalling packages via apt...")
-        packages = [
-            "python3-tqdm",
-            "python3-colorama",
-            "python3-pyfiglet",
-            "python3-pytest",
-        ]
-        subprocess.run(["sudo", "apt", "update"])
-        subprocess.run(["sudo", "apt", "install", "-y"] + packages)
-        print("✅ Packages installed via apt.")
+        install_requirements_globally()
     else:
         print("❌ Invalid choice or apt not available. Exiting installer.")
         sys.exit(1)

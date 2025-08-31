@@ -101,7 +101,6 @@ UDP_NSE_SCRIPTS = {
     69: "tftp-enum",
     123: "ntp-info,ntp-monlist",
     161: "snmp-info,snmp-interfaces",
-    514: "syslog-brute,syslog-message",
     500: "ike-version",
     1900: "upnp-info",
     5353: "mdns-info",  # if mdns is included in udp_ports
