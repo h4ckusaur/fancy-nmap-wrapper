@@ -11,4 +11,31 @@ fancy-ns/
 
 # Logs and output
 *.log
-scan_results/
+.coverage
+
+# Scan results (but keep targets.txt and categorizations.json)
+scan_results
+# Test artifacts
+MagicMock/
+# Note: test_fnw.py is kept as it's part of the project test suite
+
+# Temporary files
+*.tmp
+*.temp
+test_targets.txt
+
+# IDE and editor files
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS generated files
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db

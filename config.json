@@ -1,13 +1,5 @@
 {
-    "thread_count": 10,
-    "enable_json": false,
-    "output_directory": "scan_results",
-    "udp_ports": [
-        53, 161, 162, 67, 68, 69, 123, 137, 138, 139, 500, 514, 520, 623, 1701,
-        1900, 4500, 49152, 49153, 49154, 111, 135, 631, 1434, 5353, 49155,
-        49156, 49157, 49158, 49159, 49160, 49161, 49162, 49163, 49164, 49165,
-        49166, 49167, 49168, 49169, 49170
-    ],
-    "nmap_flags_tcp": "-sT -sC -sV -A -Pn -p1-65535",
-    "nmap_flags_udp": "-sU -Pn --top-ports 50"
+    "output_directory": "/tmp/tmpy6kjtxqi",
+    "thread_count": 15,
+    "enable_json": false
 }
