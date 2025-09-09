@@ -1,5 +1,9 @@
 {
-    "output_directory": "/tmp/tmpy6kjtxqi",
+    "output_directory": "scan_results",
     "thread_count": 15,
-    "enable_json": false
+    "enable_json": false,
+    "nmap_flags_udp": {
+        "default": ["-sU", "-Pn", "-v", "-p 1-65535"],
+        "custom": []
+    }
 }

@@ -57,7 +57,7 @@ DEFAULT_CONFIG = {
     "udp_ports": [],
     "nmap_flags_tcp": {"default": ["-sT", "-sC", "-sV", "-A", "-Pn"], "custom": []},
     "nmap_flags_udp": {
-        "default": ["-sU", "-Pn", "-v", "--top-ports 100"],
+        "default": ["-sU", "-Pn", "-v", "-p 1-65535"],
         "custom": [],
     },
 }
@@ -843,6 +843,15 @@ class UDPScan(Scan):
         if hasattr(self, "scan_manager") and self.scan_manager:
             self.scan_manager.add_scan_combination(target, "udp", self.nmap_flags)
 
+        # If no specific ports are provided and we have -p 1-65535 in flags,
+        # do simple scan
+        if not self.ports and "-p 1-65535" in self.nmap_flags:
+            print(
+                Fore.CYAN + f"[*] Simple UDP scan for {target} "
+                f"(all ports, no scripts)"
+            )
+            return self._execute_simple_udp_scan(target, config, output_file)
+
         # Phase 1: Execute initial scan without NSE scripts to identify non-closed ports
         print(Fore.CYAN + f"[*] Phase 1: Initial UDP scan for {target}")
         initial_ports = self._execute_initial_udp_scan(target, config)
@@ -1005,6 +1014,90 @@ class UDPScan(Scan):
                     results.append(None)
 
         return results
+
+    def _execute_simple_udp_scan(
+        self, target: str, config: Dict, output_file: str
+    ) -> Optional[Dict]:
+        """Execute a simple UDP scan without NSE scripts for all ports."""
+        # Build command for simple UDP scan
+        cmd = f"nmap {self.nmap_flags} {target}".strip()
+
+        try:
+            result = subprocess.run(
+                cmd.split(), capture_output=True, text=True, timeout=300
+            )
+
+            # Check for UDP scan failure condition
+            import re
+
+            ignored_states_pattern = (
+                r"All (\d+) scanned ports on ([^\s]+) are in ignored states"
+            )
+            match = re.search(ignored_states_pattern, result.stdout)
+
+            if match:
+                num_ports = match.group(1)
+                ip_addr = match.group(2)
+
+                # Mark this IP as failed to cancel remaining scans
+                if hasattr(self, "scan_manager") and self.scan_manager:
+                    self.scan_manager.mark_ip_failed(target)
+
+                print(
+                    Fore.RED
+                    + f"[!] UDP scan failed for {ip_addr}: "
+                    + f"All {num_ports} scanned ports are in ignored states"
+                )
+                return {
+                    "target": target,
+                    "error": f"All {num_ports} scanned ports are in ignored states",
+                    "stdout": result.stdout,
+                    "stderr": result.stderr,
+                    "returncode": result.returncode,
+                }
+
+            # Write output to file
+            with open(output_file, "w") as f:
+                f.write(f"Command: {cmd}\n")
+                f.write(f"Target: {target}\n")
+                f.write(f"Return code: {result.returncode}\n")
+                f.write("=" * 50 + "\n")
+                f.write("STDOUT:\n")
+                f.write(result.stdout)
+                if result.stderr:
+                    f.write("\nSTDERR:\n")
+                    f.write(result.stderr)
+
+            print(Fore.GREEN + f"[+] UDP scan completed for {target}")
+            print(Fore.YELLOW + f"[*] Results saved to: {output_file}")
+
+            return {
+                "target": target,
+                "stdout": result.stdout,
+                "stderr": result.stderr,
+                "returncode": result.returncode,
+                "command": cmd,
+                "output_file": output_file,
+            }
+
+        except subprocess.TimeoutExpired:
+            print(Fore.RED + f"[!] UDP scan timed out for {target}")
+            return {
+                "target": target,
+                "error": "Scan timed out",
+                "stdout": "",
+                "stderr": "Scan timed out after 300 seconds",
+                "returncode": -1,
+            }
+        except Exception as e:
+            print(Fore.RED + f"[!] UDP scan failed for {target}: {e}")
+            return {
+                "target": target,
+                "error": str(e),
+                "stdout": "",
+                "stderr": str(e),
+                "returncode": -1,
+            }
 
     def _get_ports_to_scan(self) -> List[int]:
         """Get list of ports to scan based on configuration."""
