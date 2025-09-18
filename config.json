@@ -3,7 +3,7 @@
     "thread_count": 15,
     "enable_json": false,
     "nmap_flags_udp": {
-        "default": ["-sU", "-Pn", "-v", "-p 1-65535"],
+        "default": ["-sU", "-Pn", "-v", "--top-ports 200"],
         "custom": []
     }
 }

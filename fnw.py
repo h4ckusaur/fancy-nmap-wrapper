@@ -57,7 +57,7 @@ DEFAULT_CONFIG = {
     "udp_ports": [],
     "nmap_flags_tcp": {"default": ["-sT", "-sC", "-sV", "-A", "-Pn"], "custom": []},
     "nmap_flags_udp": {
-        "default": ["-sU", "-Pn", "-v", "-p 1-65535"],
+        "default": ["-sU", "-Pn", "-v", "--top-ports 200"],
         "custom": [],
     },
 }
@@ -520,19 +520,35 @@ def load_config() -> Dict:
                 for key, value in DEFAULT_CONFIG.items():
                     if key not in config:
                         config[key] = value
+                # Convert output directory to absolute path based on current
+                # working directory
+                if "output_directory" in config:
+                    config["output_directory"] = os.path.abspath(
+                        config["output_directory"]
+                    )
                 return config
         except (json.JSONDecodeError, IOError) as e:
             print(Fore.RED + f"[!] Error loading config: {e}")
             print(Fore.YELLOW + "[!] Using default configuration.")
 
-    return DEFAULT_CONFIG.copy()
+    # Convert default output directory to absolute path
+    config = DEFAULT_CONFIG.copy()
+    config["output_directory"] = os.path.abspath(config["output_directory"])
+    return config
 
 
 def save_config(config: Dict) -> None:
     """Save configuration to config.json."""
     try:
+        # Create a copy of config for saving, converting absolute paths back to relative
+        save_config = config.copy()
+        if "output_directory" in save_config:
+            # Convert absolute path back to relative path for portability
+            save_config["output_directory"] = os.path.relpath(
+                save_config["output_directory"]
+            )
         with open("config.json", "w") as f:
-            json.dump(config, f, indent=4)
+            json.dump(save_config, f, indent=4)
     except IOError as e:
         print(Fore.RED + f"[!] Error saving config: {e}")
 
@@ -681,6 +697,7 @@ class TCPScan(Scan):
         nmap_flags: Optional[str] = None,
         ports: Optional[Union[str, List[int]]] = None,
         subnet: Optional[str] = None,
+        is_quickscan: bool = False,
     ):
         """Initialize the TCP scan."""
         super().__init__("tcp", mode)
@@ -689,6 +706,7 @@ class TCPScan(Scan):
         )
         self.ports = ports
         self.subnet = subnet
+        self.is_quickscan = is_quickscan
 
     def execute(self, config: Dict) -> List[Dict]:
         """Execute TCP scan (now handled by ScanManager for concurrent execution)."""
@@ -705,7 +723,11 @@ class TCPScan(Scan):
 
         # Track this flag combination for the target
         if hasattr(self, "scan_manager") and self.scan_manager:
-            self.scan_manager.add_scan_combination(target, "tcp", self.nmap_flags)
+            # Suppress verbose output for quickscan
+            verbose = not self.is_quickscan
+            self.scan_manager.add_scan_combination(
+                target, "tcp", self.nmap_flags, verbose=verbose
+            )
 
         # Build port specification
         if self.ports:
@@ -817,6 +839,7 @@ class UDPScan(Scan):
         nmap_flags: Optional[str] = None,
         ports: Optional[Union[str, List[int]]] = None,
         subnet: Optional[str] = None,
+        is_quickscan: bool = False,
     ):
         """Initialize the UDP scan."""
         super().__init__("udp", mode)
@@ -825,6 +848,7 @@ class UDPScan(Scan):
         )
         self.ports = ports
         self.subnet = subnet
+        self.is_quickscan = is_quickscan
 
     def execute(self, config: Dict) -> List[Dict]:
         """Execute UDP scan (now handled by ScanManager for concurrent execution)."""
@@ -841,16 +865,21 @@ class UDPScan(Scan):
 
         # Track this flag combination for the target
         if hasattr(self, "scan_manager") and self.scan_manager:
-            self.scan_manager.add_scan_combination(target, "udp", self.nmap_flags)
-
-        # If no specific ports are provided and we have -p 1-65535 in flags,
-        # do simple scan
-        if not self.ports and "-p 1-65535" in self.nmap_flags:
-            print(
-                Fore.CYAN + f"[*] Simple UDP scan for {target} "
-                f"(all ports, no scripts)"
+            # Suppress verbose output for quickscan
+            verbose = not self.is_quickscan
+            self.scan_manager.add_scan_combination(
+                target, "udp", self.nmap_flags, verbose=verbose
             )
-            return self._execute_simple_udp_scan(target, config, output_file)
+
+        # If no specific ports are provided and we have --top-ports in flags,
+        # do simple scan
+        if not self.ports and "--top-ports" in self.nmap_flags:
+            if verbose:
+                print(
+                    Fore.CYAN + f"[*] Simple UDP scan for {target} "
+                    f"(top ports, no scripts)"
+                )
+            return self._execute_simple_udp_scan(target, config, output_file, verbose)
 
         # Phase 1: Execute initial scan without NSE scripts to identify non-closed ports
         print(Fore.CYAN + f"[*] Phase 1: Initial UDP scan for {target}")
@@ -1016,15 +1045,15 @@ class UDPScan(Scan):
         return results
 
     def _execute_simple_udp_scan(
-        self, target: str, config: Dict, output_file: str
+        self, target: str, config: Dict, output_file: str, verbose: bool = True
     ) -> Optional[Dict]:
         """Execute a simple UDP scan without NSE scripts for all ports."""
-        # Build command for simple UDP scan
-        cmd = f"nmap {self.nmap_flags} {target}".strip()
+        # Build command for simple UDP scan with faster timing
+        cmd = f"nmap {self.nmap_flags} -T4 --max-retries 1 {target}".strip()
 
         try:
             result = subprocess.run(
-                cmd.split(), capture_output=True, text=True, timeout=300
+                cmd.split(), capture_output=True, text=True, timeout=1200
             )
 
             # Check for UDP scan failure condition
@@ -1068,8 +1097,9 @@ class UDPScan(Scan):
                     f.write("\nSTDERR:\n")
                     f.write(result.stderr)
 
-            print(Fore.GREEN + f"[+] UDP scan completed for {target}")
-            print(Fore.YELLOW + f"[*] Results saved to: {output_file}")
+            if verbose:
+                print(Fore.GREEN + f"[+] UDP scan completed for {target}")
+                print(Fore.YELLOW + f"[*] Results saved to: {output_file}")
 
             return {
                 "target": target,
@@ -1086,7 +1116,7 @@ class UDPScan(Scan):
                 "target": target,
                 "error": "Scan timed out",
                 "stdout": "",
-                "stderr": "Scan timed out after 300 seconds",
+                "stderr": "Scan timed out after 1200 seconds",
                 "returncode": -1,
             }
         except Exception as e:
@@ -1272,7 +1302,9 @@ class ScanManager:
             return True
         return False
 
-    def add_scan_combination(self, ip: str, protocol: str, flags: str) -> None:
+    def add_scan_combination(
+        self, ip: str, protocol: str, flags: str, verbose: bool = True
+    ) -> None:
         """Add a flag combination for a specific IP and protocol."""
         key = (ip, protocol)
         if key not in self.scan_combinations:
@@ -1280,9 +1312,11 @@ class ScanManager:
 
         if flags not in self.scan_combinations[key]:
             self.scan_combinations[key].append(flags)
-            print(
-                Fore.CYAN + f"[+] Added flag combination for {ip} ({protocol}): {flags}"
-            )
+            if verbose:
+                print(
+                    Fore.CYAN + f"[+] Added flag combination for {ip} "
+                    f"({protocol}): {flags}"
+                )
 
     def get_scan_combinations(self, ip: str, protocol: str) -> List[str]:
         """Get all flag combinations for a specific IP and protocol."""
@@ -1430,10 +1464,32 @@ class ScanManager:
             return self.previously_categorized_subnets[subnet]
         return None
 
+    def _get_targets_file_path(self) -> Optional[str]:
+        """Get the path to targets.txt with fallback to script directory."""
+        targets_file = os.path.join(self.config["output_directory"], "targets.txt")
+
+        # If targets.txt doesn't exist in current directory, try script
+        # directory as fallback
+        if not os.path.exists(targets_file):
+            script_dir = os.path.dirname(os.path.abspath(__file__))
+            script_targets_file = os.path.join(
+                script_dir, "scan_results", "targets.txt"
+            )
+            if os.path.exists(script_targets_file):
+                print(
+                    Fore.YELLOW + f"[*] Using targets from script directory: "
+                    f"{script_targets_file}"
+                )
+                return script_targets_file
+            else:
+                return None
+
+        return targets_file
+
     def load_existing_targets(self) -> bool:
         """Load and categorize existing targets from targets.txt."""
-        targets_file = os.path.join(self.config["output_directory"], "targets.txt")
-        if not os.path.exists(targets_file):
+        targets_file = self._get_targets_file_path()
+        if not targets_file:
             return False
 
         try:
@@ -1578,8 +1634,8 @@ class ScanManager:
             return
 
         # Perform ping sweep once for all targets
-        targets_file = os.path.join(self.config["output_directory"], "targets.txt")
-        if not os.path.exists(targets_file):
+        targets_file = self._get_targets_file_path()
+        if not targets_file:
             print(Fore.RED + "[!] No targets.txt found. Run discovery scan first.")
             return
 
@@ -1630,6 +1686,29 @@ class ScanManager:
         # Only print completion message if scans were actually executed
         if scans_executed:
             print(Fore.GREEN + "\n[+] All scans completed.")
+
+            # Print summary of results
+            self._print_scan_summary()
+
+    def _print_scan_summary(self) -> None:
+        """Print a summary of scan results."""
+        print(Fore.CYAN + "\n=== Scan Results Summary ===")
+
+        # Find all result files
+        result_files = []
+        if os.path.exists(self.config["output_directory"]):
+            for file in os.listdir(self.config["output_directory"]):
+                if file.startswith("portscan_") and file.endswith(".txt"):
+                    result_files.append(file)
+
+        if result_files:
+            print(Fore.GREEN + f"[+] Generated {len(result_files)} result files:")
+            for file in sorted(result_files):
+                print(Fore.YELLOW + f"    • {file}")
+        else:
+            print(Fore.YELLOW + "[!] No result files found.")
+
+        print(Fore.CYAN + "=" * 30)
 
     def _filter_targets_with_ping(self, targets: List[str]) -> List[str]:
         """Filter targets with a quick ping sweep to remove non-responsive IPs."""
@@ -1738,6 +1817,10 @@ class ScanManager:
                 for scan, target in all_tasks
             }
 
+            # Collect results and messages to avoid interfering with progress bar
+            results = []
+            messages = []
+
             with tqdm(
                 total=len(futures),
                 desc="TCP Scanning",
@@ -1756,21 +1839,26 @@ class ScanManager:
                         scan, target = futures[future]
 
                         if result and result.get("skipped"):
-                            print(
+                            messages.append(
                                 Fore.YELLOW
                                 + f"[!] Skipped scan for {target} (IP marked as failed)"
                             )
 
                         pbar.set_postfix({"Mode": scan.mode, "Target": target})
                         pbar.update(1)
+                        results.append((scan, target, result))
                     except Exception as e:
-                        print(Fore.RED + f"[!] Error in TCP scan: {e}")
+                        messages.append(Fore.RED + f"[!] Error in TCP scan: {e}")
                         pbar.update(1)
+
+            # Print collected messages after progress bar is done
+            for msg in messages:
+                print(msg)
 
     def _execute_tcp_scans(self, scans: List[Scan]) -> None:
         """Execute TCP scans concurrently with one thread per IP (legacy method)."""
-        targets_file = os.path.join(self.config["output_directory"], "targets.txt")
-        if not os.path.exists(targets_file):
+        targets_file = self._get_targets_file_path()
+        if not targets_file:
             print(Fore.RED + "[!] No targets.txt found. Run discovery scan first.")
             return
 
@@ -1849,6 +1937,10 @@ class ScanManager:
                 for scan, target in all_tasks
             }
 
+            # Collect results and messages to avoid interfering with progress bar
+            results = []
+            messages = []
+
             with tqdm(
                 total=len(futures),
                 desc="UDP Scanning",
@@ -1867,21 +1959,26 @@ class ScanManager:
                         scan, target = futures[future]
 
                         if result and result.get("skipped"):
-                            print(
+                            messages.append(
                                 Fore.YELLOW
                                 + f"[!] Skipped scan for {target} (IP marked as failed)"
                             )
 
                         pbar.set_postfix({"Mode": scan.mode, "Target": target})
                         pbar.update(1)
+                        results.append((scan, target, result))
                     except Exception as e:
-                        print(Fore.RED + f"[!] Error in UDP scan: {e}")
+                        messages.append(Fore.RED + f"[!] Error in UDP scan: {e}")
                         pbar.update(1)
+
+            # Print collected messages after progress bar is done
+            for msg in messages:
+                print(msg)
 
     def _execute_udp_scans(self, scans: List[Scan]) -> None:
         """Execute UDP scans concurrently with one thread per IP (legacy method)."""
-        targets_file = os.path.join(self.config["output_directory"], "targets.txt")
-        if not os.path.exists(targets_file):
+        targets_file = self._get_targets_file_path()
+        if not targets_file:
             print(Fore.RED + "[!] No targets.txt found. Run discovery scan first.")
             return
 
@@ -2006,12 +2103,12 @@ class UserInterface:
         print(Fore.CYAN + "\n=== Quick Scan (Multi-Flag Combination Scan) ===")
 
         # Continuously check for targets.txt file
-        targets_file = os.path.join(self.config["output_directory"], "targets.txt")
         max_attempts = 10
         attempt = 0
 
         while attempt < max_attempts:
-            if os.path.exists(targets_file):
+            targets_file = self.scan_manager._get_targets_file_path()
+            if targets_file:
                 try:
                     with open(targets_file, "r") as f:
                         targets = [line.strip() for line in f if line.strip()]
@@ -2074,12 +2171,29 @@ class UserInterface:
             )
             return
 
+        # For quick scan, automatically assign "quick" mode to all subnets
+        # that don't already have a mode assigned
+        for subnet, info in self.scan_manager.categorized_targets.items():
+            if info["mode"] is None:
+                info["mode"] = "quick"
+                print(Fore.GREEN + f"[+] Assigned 'quick' mode to subnet {subnet}")
+
+        # Check if we have any subnets with modes assigned
+        subnets_with_modes = [
+            subnet
+            for subnet, info in self.scan_manager.categorized_targets.items()
+            if info["mode"] is not None
+        ]
+
+        if not subnets_with_modes:
+            print(Fore.RED + "[!] No subnets available for scanning.")
+            return
+
         # Collect all available flag combinations
         tcp_combinations = self._get_all_tcp_flag_combinations()
-        udp_combinations = self._get_all_udp_flag_combinations()
 
         # Generate dynamic message based on available combinations
-        scan_message = self._generate_scan_message(tcp_combinations, udp_combinations)
+        scan_message = self._generate_scan_message(tcp_combinations, [])
         print(Fore.CYAN + f"\n[*] {scan_message}")
 
         # Create scans for each combination and subnet
@@ -2089,25 +2203,31 @@ class UserInterface:
                 # Create TCP scans for each flag combination
                 for flags in tcp_combinations:
                     tcp_scan = TCPScan(
-                        mode=info["mode"], nmap_flags=flags, subnet=subnet
+                        mode=info["mode"],
+                        nmap_flags=flags,
+                        subnet=subnet,
+                        is_quickscan=True,
                     )
                     self.scan_manager.add_scan(tcp_scan)
                     total_scans += 1
 
-                # Create UDP scans for each flag combination
-                for flags in udp_combinations:
-                    udp_scan = UDPScan(
-                        mode=info["mode"], nmap_flags=flags, subnet=subnet
-                    )
-                    self.scan_manager.add_scan(udp_scan)
-                    total_scans += 1
+                # Create only one simple UDP scan (not multiple flag combinations)
+                simple_udp_flags = " ".join(self.config["nmap_flags_udp"]["default"])
+                udp_scan = UDPScan(
+                    mode=info["mode"],
+                    nmap_flags=simple_udp_flags,
+                    subnet=subnet,
+                    is_quickscan=True,
+                )
+                self.scan_manager.add_scan(udp_scan)
+                total_scans += 1
 
         print(
             Fore.GREEN + f"[+] Created {total_scans} total scans across "
             f"{len(self.scan_manager.categorized_targets)} subnets"
         )
         print(Fore.YELLOW + f"[*] TCP combinations: {len(tcp_combinations)}")
-        print(Fore.YELLOW + f"[*] UDP combinations: {len(udp_combinations)}")
+        print(Fore.YELLOW + "[*] UDP scans: 1 simple scan per subnet")
 
         # Execute the scans
         result = self.run_scans()
